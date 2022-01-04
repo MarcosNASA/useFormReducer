@@ -1,14 +1,15 @@
-import React from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   callAll,
-  flattenArrayOfObjectsIntoPositionedObject,
-  getNestedPropertyValue,
-  getTrue,
   identity,
-  noop,
-  pipe,
+  updateObjectDeeply,
   prefixKeys,
-  updateObjectDeeply
+  getNestedPropertyValue,
+  pipe,
+  noop,
+  flattenArrayOfObjectsIntoPositionedObject,
+  getNestedPropertyKeyDescriptor,
+  truePredicate
 } from "./helpers";
 
 export const VALIDATION_MODE = {
@@ -17,15 +18,7 @@ export const VALIDATION_MODE = {
   onBlur: "onBlur"
 };
 
-const getDirtyFields = ({ initial, current, field, dirtyFields }) =>
-  Object.is(
-    getNestedPropertyValue(initial, field),
-    getNestedPropertyValue(current, field)
-  )
-    ? dirtyFields.filter((dirtyField) => dirtyField !== field)
-    : [...new Set([...dirtyFields, field])];
-
-export const useReduceForm = ({
+export const useFormReducer = ({
   initialValue,
   validations = {},
   dependencies = {},
@@ -33,8 +26,8 @@ export const useReduceForm = ({
   reValidateMode = VALIDATION_MODE.onSubmit,
   reducer: customReducer
 }) => {
-  const initialValueRef = React.useRef(initialValue);
-  const [formState, setFormState] = React.useState({
+  const initialValueRef = useRef(initialValue);
+  const [formState, setFormState] = useState({
     form: { ...initialValue },
     dirtyFields: [],
     hasInvalidFields: false,
@@ -42,9 +35,10 @@ export const useReduceForm = ({
     touchedFields: [],
     hasRevalidated: false
   });
-  const { dirtyFields, touchedFields, form } = formState;
+  const { form, dirtyFields, invalidFields, touchedFields } = formState;
+  const formControlsRefs = useRef([]);
 
-  const validateField = React.useMemo(
+  const validateField = useMemo(
     () => makeFieldValidator({ validations, dependencies }),
     [validations, dependencies]
   );
@@ -57,6 +51,14 @@ export const useReduceForm = ({
       ? [makeValidationReducer({ validations })]
       : [])
   ];
+  const setForm = (newForm = form) => {
+    setFormState({
+      ...formState,
+      form: {
+        ...newForm
+      }
+    });
+  };
 
   const revalidate = (newFormState = formState) => ({
     ...reduceForm({ ...newFormState, invalidFields: [] }, reducers),
@@ -73,10 +75,10 @@ export const useReduceForm = ({
     const shouldRevalidate = reValidateMode === VALIDATION_MODE.onChange;
     // prettier-ignore
     const { form: updatedForm, invalidFields: updatedInvalidFields } = shouldRevalidate
-            ? revalidate(newFormState)
-            : shouldValidate
-              ? validateField(newFormState, { name })
-              : newFormState
+        ? revalidate(newFormState)
+        : shouldValidate
+          ? validateField(newFormState, { name })
+          : newFormState
 
     setFormState({
       ...formState,
@@ -91,6 +93,13 @@ export const useReduceForm = ({
         hasInvalidFields: updatedInvalidFields.length > 0,
         invalidFields: updatedInvalidFields
       })
+    });
+  };
+
+  const handleFocus = ({ target: { name } }) => {
+    setFormState({
+      ...formState,
+      touchedFields: [...new Set([...touchedFields, name])]
     });
   };
 
@@ -110,33 +119,53 @@ export const useReduceForm = ({
     });
   };
 
-  const handleFocus = ({ target: { name } }) => {
-    setFormState({
-      ...formState,
-      touchedFields: [...new Set([...touchedFields, name])]
-    });
-  };
-
   const register = ({
-    name,
-    type,
+    name: customName,
     onBlur: customHandleBlur,
     onChange: customHandleChange = identity,
     onFocus: customHandleFocus,
+    valueGetter = identity,
     ...otherProps
-  } = {}) => ({
-    ...otherProps,
-    type,
-    name: Array.isArray(name) ? name.join(".") : name,
-    value: getNestedPropertyValue(form, name) || "",
-    onBlur: callAll(customHandleBlur, handleBlur),
-    onChange: pipe(customHandleChange, handleChange),
-    onFocus: callAll(customHandleFocus, handleFocus)
-  });
+  } = {}) => {
+    const name = Array.isArray(customName) ? customName.join(".") : customName;
+    return {
+      ...otherProps,
+      name,
+      value: valueGetter(getNestedPropertyValue(form, name)) ?? "",
+      onBlur: callAll(customHandleBlur, handleBlur),
+      onChange: pipe(customHandleChange, handleChange),
+      onFocus: callAll(customHandleFocus, handleFocus),
+      ref: (element) => {
+        formControlsRefs.current = {
+          ...formControlsRefs.current,
+          [name]: element
+        };
+      }
+    };
+  };
+
+  const unregister = (name, { form: newForm = form } = {}) => {
+    setFormState({
+      ...formState,
+      form: { ...newForm },
+      invalidFields: invalidFields.filter(
+        (invalidField) => !invalidField.match(new RegExp(name, "ig"))
+      ),
+      touchedFields: touchedFields.filter(
+        (invalidField) => !invalidField.match(new RegExp(name, "ig"))
+      ),
+      dirtyFields: dirtyFields.filter(
+        (invalidField) => !invalidField.match(new RegExp(name, "ig"))
+      )
+    });
+    formControlsRefs.current = Object.fromEntries(
+      Object.entries(formControlsRefs).filter(
+        ([formControlRefName]) => formControlRefName !== name
+      )
+    );
+  };
 
   const handleSubmit = (onValid = noop, onInvalid = noop) => (event) => {
-    event.preventDefault();
-
     const shouldValidate = [mode, reValidateMode].includes(
       VALIDATION_MODE.onSubmit
     );
@@ -154,6 +183,8 @@ export const useReduceForm = ({
       ? onInvalid
       : onValid;
     customHandleSubmit(updatedFormState, { clear, setFormState, revalidate });
+
+    event.preventDefault();
   };
 
   const clear = () => {
@@ -167,11 +198,18 @@ export const useReduceForm = ({
 
   return [
     formState,
-    { clear, handleSubmit, register, revalidate, setFormState }
+    {
+      clear,
+      formControlsRefs,
+      handleSubmit,
+      register,
+      revalidate,
+      setForm,
+      setFormState,
+      unregister
+    }
   ];
 };
-
-const getNestedPropertyKeyDescriptor = (key) => key.replace(/\d\.*/i, "");
 
 const makeFieldValidator = ({ validations, dependencies }) => (
   formState,
@@ -183,18 +221,26 @@ const makeFieldValidator = ({ validations, dependencies }) => (
     getNestedPropertyValue(
       dependencies,
       getNestedPropertyKeyDescriptor(name)
-    ) || getTrue;
-  const isRelevantField = relevantFieldGetter(form);
+    ) || truePredicate;
+  const getIsRelevantField =
+    typeof relevantFieldGetter === "function"
+      ? relevantFieldGetter
+      : truePredicate;
+  const isRelevantField = getIsRelevantField({
+    name,
+    value: getNestedPropertyValue(form, name),
+    form
+  });
   const newForm = isRelevantField
     ? form
     : updateObjectDeeply(form, {
         property: name,
-        value: ""
+        value: null
       }); /* clears non-relevant fields */
 
   const validFieldGetter =
     getNestedPropertyValue(validations, getNestedPropertyKeyDescriptor(name)) ||
-    getTrue;
+    truePredicate;
   const isValidField = isRelevantField
     ? validFieldGetter({
         name,
@@ -241,9 +287,11 @@ const makeDependencyReducer = ({ dependencies }) => {
       getNestedPropertyValue(
         dependencies,
         getNestedPropertyKeyDescriptor(name)
-      ) || getTrue;
+      ) || truePredicate;
     const getIsRelevantField =
-      typeof relevantFieldGetter === "function" ? relevantFieldGetter : getTrue;
+      typeof relevantFieldGetter === "function"
+        ? relevantFieldGetter
+        : truePredicate;
     const isRelevantField = getIsRelevantField({
       name,
       value: getNestedPropertyValue(form, name),
@@ -252,7 +300,8 @@ const makeDependencyReducer = ({ dependencies }) => {
     return isRelevantField
       ? { ...soFar, hasInvalidFields: invalidFields.length > 0 }
       : {
-          ...updateObjectDeeply(soFar, { property: name, value: "" }),
+          ...soFar,
+          form: updateObjectDeeply(form, { property: name, value: null }),
           invalidFields: invalidFields.filter(
             (invalidField) => invalidField !== name
           ),
@@ -278,7 +327,7 @@ const makeValidationReducer = ({ validations }) => {
       getNestedPropertyKeyDescriptor(name)
     );
     const getIsValidField =
-      typeof validFieldGetter === "function" ? validFieldGetter : getTrue;
+      typeof validFieldGetter === "function" ? validFieldGetter : truePredicate;
     const isValidField = getIsValidField({
       name,
       value: getNestedPropertyValue(form, name),
@@ -295,3 +344,11 @@ const makeValidationReducer = ({ validations }) => {
 
   return validationReducer;
 };
+
+const getDirtyFields = ({ initial, current, field, dirtyFields }) =>
+  Object.is(
+    getNestedPropertyValue(initial, field),
+    getNestedPropertyValue(current, field)
+  )
+    ? dirtyFields.filter((dirtyField) => dirtyField !== field)
+    : [...new Set([...dirtyFields, field])];
