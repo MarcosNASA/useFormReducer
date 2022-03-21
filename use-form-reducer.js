@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import * as React from "react";
 import {
   callAll,
   identity,
@@ -23,11 +23,11 @@ export const useFormReducer = ({
   validations = {},
   dependencies = {},
   mode = VALIDATION_MODE.onChange,
-  reValidateMode = VALIDATION_MODE.onSubmit,
+  revalidationMode = VALIDATION_MODE.onSubmit,
   reducer: customReducer
 }) => {
-  const initialValueRef = useRef(initialValue);
-  const [formState, setFormState] = useState({
+  const initialValueRef = React.useRef(initialValue);
+  const [formState, setFormState] = React.useState({
     form: { ...initialValue },
     dirtyFields: [],
     hasInvalidFields: false,
@@ -36,29 +36,61 @@ export const useFormReducer = ({
     hasRevalidated: false
   });
   const { form, dirtyFields, invalidFields, touchedFields } = formState;
-  const formControlsRefs = useRef([]);
+  const formControlsRefs = React.useRef([]);
 
-  const validateField = useMemo(
-    () => makeFieldValidator({ validations, dependencies }),
-    [validations, dependencies]
+  const validateField = React.useMemo(
+    () =>
+      makeFieldValidator({
+        dependencies:
+          typeof dependencies === "function"
+            ? dependencies(form)
+            : dependencies,
+        validations:
+          typeof validations === "function" ? validations(form) : validations
+      }),
+    [form, dependencies, validations]
   );
 
-  const reducers = customReducer || [
-    ...(Object.keys(dependencies).length > 0
-      ? [makeDependencyReducer({ dependencies })]
-      : []),
-    ...(Object.keys(validations).length > 0
-      ? [makeValidationReducer({ validations })]
-      : [])
-  ];
-  const setForm = (newForm = form) => {
-    setFormState({
-      ...formState,
+  const reducers = React.useMemo(
+    () =>
+      customReducer || [
+        ...(Object.keys(
+          typeof dependencies === "function" ? dependencies(form) : dependencies
+        ).length > 0
+          ? [
+              makeDependencyReducer({
+                dependencies:
+                  typeof dependencies === "function"
+                    ? dependencies(form)
+                    : dependencies
+              })
+            ]
+          : []),
+        ...(Object.keys(
+          typeof validations === "function" ? validations(form) : validations
+        ).length > 0
+          ? [
+              makeValidationReducer({
+                validations:
+                  typeof validations === "function"
+                    ? validations(form)
+                    : validations
+              })
+            ]
+          : [])
+      ],
+    [form, customReducer, dependencies, validations]
+  );
+
+  const setForm = React.useCallback((newForm) => {
+    setFormState((currentFormState) => ({
+      ...currentFormState,
       form: {
+        ...currentFormState.form,
         ...newForm
       }
-    });
-  };
+    }));
+  }, []);
 
   const revalidate = (newFormState = formState) => ({
     ...reduceForm({ ...newFormState, invalidFields: [] }, reducers),
@@ -72,7 +104,7 @@ export const useFormReducer = ({
     };
 
     const shouldValidate = mode === VALIDATION_MODE.onChange;
-    const shouldRevalidate = reValidateMode === VALIDATION_MODE.onChange;
+    const shouldRevalidate = revalidationMode === VALIDATION_MODE.onChange;
     // prettier-ignore
     const { form: updatedForm, invalidFields: updatedInvalidFields } = shouldRevalidate
         ? revalidate(newFormState)
@@ -96,27 +128,27 @@ export const useFormReducer = ({
     });
   };
 
-  const handleFocus = ({ target: { name } }) => {
-    setFormState({
-      ...formState,
-      touchedFields: [...new Set([...touchedFields, name])]
-    });
-  };
-
   const handleBlur = ({ target: { name } }) => {
-    if (![mode, reValidateMode].includes(VALIDATION_MODE.onBlur)) return;
+    if (![mode, revalidationMode].includes(VALIDATION_MODE.onBlur)) return;
 
     const {
       form: updatedForm,
       invalidFields: updatedInvalidFields
     } = validateField(formState, { name });
 
-    setFormState({
-      ...formState,
+    setFormState((currentFormState) => ({
+      ...currentFormState,
       form: updatedForm,
       invalidFields: updatedInvalidFields,
       hasInvalidFields: updatedInvalidFields.length > 0
-    });
+    }));
+  };
+
+  const handleFocus = ({ target: { name } }) => {
+    setFormState((currentFormState) => ({
+      ...currentFormState,
+      touchedFields: [...new Set([...touchedFields, name])]
+    }));
   };
 
   const register = ({
@@ -125,6 +157,7 @@ export const useFormReducer = ({
     onChange: customHandleChange = identity,
     onFocus: customHandleFocus,
     valueGetter = identity,
+    noRef = false,
     ...otherProps
   } = {}) => {
     const name = Array.isArray(customName) ? customName.join(".") : customName;
@@ -135,12 +168,14 @@ export const useFormReducer = ({
       onBlur: callAll(customHandleBlur, handleBlur),
       onChange: pipe(customHandleChange, handleChange),
       onFocus: callAll(customHandleFocus, handleFocus),
-      ref: (element) => {
-        formControlsRefs.current = {
-          ...formControlsRefs.current,
-          [name]: element
-        };
-      }
+      ...(!noRef && {
+        ref: (element) => {
+          formControlsRefs.current = {
+            ...formControlsRefs.current,
+            [name]: element
+          };
+        }
+      })
     };
   };
 
@@ -165,35 +200,35 @@ export const useFormReducer = ({
     );
   };
 
+  const clear = () => {
+    setFormState((currentFormState) => ({
+      ...currentFormState,
+      touchedFields: [],
+      dirtyFields: [],
+      invalidFields: []
+    }));
+  };
+
   const handleSubmit = (onValid = noop, onInvalid = noop) => (event) => {
-    const shouldValidate = [mode, reValidateMode].includes(
+    const shouldValidate = [mode, revalidationMode].includes(
       VALIDATION_MODE.onSubmit
     );
-
     const updatedFormState = shouldValidate ? revalidate(formState) : formState;
     setFormState(updatedFormState);
 
     const {
-      hasInvalidFields: hasInvalidFieldsAfterRevalidation
+      hasInvalidFields: hasInvalidFieldsAfterRevalidation,
+      form: updatedForm
     } = updatedFormState;
     initialValueRef.current = hasInvalidFieldsAfterRevalidation
       ? initialValueRef.current
-      : form;
+      : updatedForm;
     const customHandleSubmit = hasInvalidFieldsAfterRevalidation
       ? onInvalid
       : onValid;
-    customHandleSubmit(updatedFormState, { clear, setFormState, revalidate });
+    customHandleSubmit(updatedFormState, { clear, revalidate, setFormState });
 
     event.preventDefault();
-  };
-
-  const clear = () => {
-    setFormState({
-      ...formState,
-      touchedFields: [],
-      dirtyFields: [],
-      invalidFields: []
-    });
   };
 
   return [
@@ -235,7 +270,7 @@ const makeFieldValidator = ({ validations, dependencies }) => (
     ? form
     : updateObjectDeeply(form, {
         property: name,
-        value: null
+        value: ""
       }); /* clears non-relevant fields */
 
   const validFieldGetter =
