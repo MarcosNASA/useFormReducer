@@ -308,7 +308,7 @@ const reduceForm = (formState, reducers) =>
 
 const selectForm = ({ form }) => form;
 
-const makeDependencyReducer = ({ dependencies }) => {
+const makeDependencyReducer = ({ dependencyRules }) => {
   const dependencyReducer = (soFar, [name, value]) => {
     const { form, invalidFields } = soFar;
 
@@ -320,7 +320,7 @@ const makeDependencyReducer = ({ dependencies }) => {
 
     const relevantFieldGetter =
       getNestedPropertyValue(
-        dependencies,
+        dependencyRules,
         getNestedPropertyKeyDescriptor(name)
       ) || truePredicate;
     const getIsRelevantField =
@@ -336,7 +336,7 @@ const makeDependencyReducer = ({ dependencies }) => {
       ? { ...soFar, hasInvalidFields: invalidFields.length > 0 }
       : {
           ...soFar,
-          form: updateObjectDeeply(form, { property: name, value: null }),
+          form: updateObjectDeeply(form, { property: name, value: "" }),
           invalidFields: invalidFields.filter(
             (invalidField) => invalidField !== name
           ),
@@ -347,7 +347,7 @@ const makeDependencyReducer = ({ dependencies }) => {
   return dependencyReducer;
 };
 
-const makeValidationReducer = ({ validations }) => {
+const makeValidationReducer = ({ validationRules }) => {
   const validationReducer = (soFar, [name, value]) => {
     const { form, invalidFields } = soFar;
 
@@ -358,7 +358,7 @@ const makeValidationReducer = ({ validations }) => {
     }
 
     const validFieldGetter = getNestedPropertyValue(
-      validations,
+      validationRules,
       getNestedPropertyKeyDescriptor(name)
     );
     const getIsValidField =
