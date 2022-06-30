@@ -20,11 +20,11 @@ export const VALIDATION_MODE = {
 
 export const useFormReducer = ({
   initialValue,
-  validations = {},
   dependencies = {},
+  validations = {},
   mode = VALIDATION_MODE.onChange,
   revalidationMode = VALIDATION_MODE.onSubmit,
-  reducer: customReducer
+  reducer: customReducer,
 }) => {
   const initialValueRef = React.useRef(initialValue);
   const [formState, setFormState] = React.useState({
@@ -36,7 +36,7 @@ export const useFormReducer = ({
     hasRevalidated: false
   });
   const { form, dirtyFields, invalidFields, touchedFields } = formState;
-  const formControlsRefs = React.useRef([]);
+  const formControlsRefs = React.useRef({});
 
   const validateField = React.useMemo(
     () =>
@@ -82,49 +82,60 @@ export const useFormReducer = ({
     [form, customReducer, dependencies, validations]
   );
 
-  const setForm = React.useCallback((newForm) => {
+  const setForm = React.useCallback((updatedForm) => {
     setFormState((currentFormState) => ({
       ...currentFormState,
       form: {
         ...currentFormState.form,
-        ...newForm
+        ...updatedForm
       }
     }));
   }, []);
 
-  const revalidate = (newFormState = formState) => ({
-    ...reduceForm({ ...newFormState, invalidFields: [] }, reducers),
-    hasRevalidated: true
-  });
+  const revalidate = React.useCallback(
+    (updatedFormState = formState) => ({
+      ...reduceForm({ ...updatedFormState, invalidFields: [] }, reducers),
+      hasRevalidated: true
+    }),
+    [reducers, formState]
+  );
 
   const handleChange = ({ name, value }) => {
-    const newFormState = {
-      ...formState,
-      form: updateObjectDeeply(form, { property: name, value })
-    };
-
     const shouldValidate = mode === VALIDATION_MODE.onChange;
     const shouldRevalidate = revalidationMode === VALIDATION_MODE.onChange;
-    // prettier-ignore
-    const { form: updatedForm, invalidFields: updatedInvalidFields } = shouldRevalidate
-        ? revalidate(newFormState)
-        : shouldValidate
-          ? validateField(newFormState, { name })
-          : newFormState
 
-    setFormState({
-      ...formState,
-      form: updatedForm,
-      dirtyFields: getDirtyFields({
-        initial: initialValueRef.current,
-        current: updatedForm,
-        field: name,
-        dirtyFields
-      }),
-      ...((shouldValidate || shouldRevalidate) && {
-        hasInvalidFields: updatedInvalidFields.length > 0,
+    setFormState((currentFormState) => {
+      const { form: currentForm } = currentFormState;
+
+      const updatedFormState = {
+        ...currentFormState,
+        form: updateObjectDeeply(currentForm, { property: name, value })
+      };
+
+      const getValidatedFormState = () => {
+        if (shouldRevalidate) return revalidate(updatedFormState);
+        if (shouldValidate) return validateField(updatedFormState, { name });
+        return updatedFormState;
+      };
+      const {
+        form: updatedForm,
         invalidFields: updatedInvalidFields
-      })
+      } = getValidatedFormState();
+
+      return {
+        ...updatedFormState,
+        form: updatedForm,
+        dirtyFields: getDirtyFields({
+          initial: initialValueRef.current,
+          current: updatedForm,
+          field: name,
+          dirtyFields
+        }),
+        ...((shouldValidate || shouldRevalidate) && {
+          hasInvalidFields: updatedInvalidFields.length > 0,
+          invalidFields: updatedInvalidFields
+        })
+      };
     });
   };
 
@@ -152,10 +163,10 @@ export const useFormReducer = ({
   };
 
   const register = ({
-    name: customName,
-    onBlur: customHandleBlur,
+    name: customName = "",
+    onBlur: customHandleBlur = identity,
     onChange: customHandleChange = identity,
-    onFocus: customHandleFocus,
+    onFocus: customHandleFocus = identity,
     valueGetter = identity,
     noRef = false,
     ...otherProps
@@ -179,10 +190,10 @@ export const useFormReducer = ({
     };
   };
 
-  const unregister = (name, { form: newForm = form } = {}) => {
+  const unregister = (name, { form: updatedForm = form } = {}) => {
     setFormState({
       ...formState,
-      form: { ...newForm },
+      form: { ...updatedForm },
       invalidFields: invalidFields.filter(
         (invalidField) => !invalidField.match(new RegExp(name, "ig"))
       ),
@@ -210,6 +221,8 @@ export const useFormReducer = ({
   };
 
   const handleSubmit = (onValid = noop, onInvalid = noop) => (event) => {
+    event?.preventDefault();
+
     const shouldValidate = [mode, revalidationMode].includes(
       VALIDATION_MODE.onSubmit
     );
@@ -227,8 +240,6 @@ export const useFormReducer = ({
       ? onInvalid
       : onValid;
     customHandleSubmit(updatedFormState, { clear, revalidate, setFormState });
-
-    event.preventDefault();
   };
 
   return [
@@ -258,15 +269,13 @@ const makeFieldValidator = ({ validations, dependencies }) => (
       getNestedPropertyKeyDescriptor(name)
     ) || truePredicate;
   const getIsRelevantField =
-    typeof relevantFieldGetter === "function"
-      ? relevantFieldGetter
-      : truePredicate;
+    typeof relevantFieldGetter === "function" ? relevantFieldGetter : getTrue;
   const isRelevantField = getIsRelevantField({
     name,
     value: getNestedPropertyValue(form, name),
     form
   });
-  const newForm = isRelevantField
+  const updatedForm = isRelevantField
     ? form
     : updateObjectDeeply(form, {
         property: name,
@@ -279,18 +288,18 @@ const makeFieldValidator = ({ validations, dependencies }) => (
   const isValidField = isRelevantField
     ? validFieldGetter({
         name,
-        value: getNestedPropertyValue(newForm, name),
-        form: newForm
+        value: getNestedPropertyValue(updatedForm, name),
+        form: updatedForm
       })
     : true;
-  const newInvalidFields = isValidField
+  const updatedInvalidFields = isValidField
     ? invalidFields.filter((field) => field !== name)
     : [...new Set([...invalidFields, name])];
 
   return {
     ...formState,
-    form: newForm,
-    invalidFields: newInvalidFields
+    form: updatedForm,
+    invalidFields: updatedInvalidFields
   };
 };
 
@@ -308,7 +317,7 @@ const reduceForm = (formState, reducers) =>
 
 const selectForm = ({ form }) => form;
 
-const makeDependencyReducer = ({ dependencyRules }) => {
+const makeDependencyReducer = ({ dependencies }) => {
   const dependencyReducer = (soFar, [name, value]) => {
     const { form, invalidFields } = soFar;
 
@@ -320,13 +329,11 @@ const makeDependencyReducer = ({ dependencyRules }) => {
 
     const relevantFieldGetter =
       getNestedPropertyValue(
-        dependencyRules,
+        dependencies,
         getNestedPropertyKeyDescriptor(name)
       ) || truePredicate;
     const getIsRelevantField =
-      typeof relevantFieldGetter === "function"
-        ? relevantFieldGetter
-        : truePredicate;
+      typeof relevantFieldGetter === "function" ? relevantFieldGetter : getTrue;
     const isRelevantField = getIsRelevantField({
       name,
       value: getNestedPropertyValue(form, name),
@@ -347,7 +354,7 @@ const makeDependencyReducer = ({ dependencyRules }) => {
   return dependencyReducer;
 };
 
-const makeValidationReducer = ({ validationRules }) => {
+const makeValidationReducer = ({ validations }) => {
   const validationReducer = (soFar, [name, value]) => {
     const { form, invalidFields } = soFar;
 
@@ -358,11 +365,11 @@ const makeValidationReducer = ({ validationRules }) => {
     }
 
     const validFieldGetter = getNestedPropertyValue(
-      validationRules,
+      validations,
       getNestedPropertyKeyDescriptor(name)
     );
     const getIsValidField =
-      typeof validFieldGetter === "function" ? validFieldGetter : truePredicate;
+      typeof validFieldGetter === "function" ? validFieldGetter : getTrue;
     const isValidField = getIsValidField({
       name,
       value: getNestedPropertyValue(form, name),
